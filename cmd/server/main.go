@@ -3,36 +3,68 @@ package main
 import (
 	"fmt"
 	"log"
-	"os"
-	"os/signal"
 
+	"github.com/bootdotdev/learn-pub-sub-starter/internal/gamelogic"
+	"github.com/bootdotdev/learn-pub-sub-starter/internal/pubsub"
+	"github.com/bootdotdev/learn-pub-sub-starter/internal/routing"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 func main() {
 	fmt.Println("Starting Peril server...")
+	const connectionString = "amqp://guest:guest@localhost:5672/"
 
-	// 1. Connection string for the local RabbitMQ Docker container
-	connString := "amqp://guest:guest@localhost:5672/"
-
-	// 2. Dial the server to create a connection
-	conn, err := amqp.Dial(connString)
+	conn, err := amqp.Dial(connectionString)
 	if err != nil {
-		log.Fatalf("Error connecting to RabbitMQ: %v", err)
+		log.Fatalf("could not connect to RabbitMQ: %v", err)
 	}
-	
-	// 3. Defer closing the connection to clean up resources on exit
 	defer conn.Close()
-	fmt.Println("Connection to RabbitMQ was successful!")
+	fmt.Println("Peril game server connected to RabbitMQ!")
 
-	// 4. Create a channel to listen for system interrupt signals (Ctrl+C)
-	signalChan := make(chan os.Signal, 1)
-	signal.Notify(signalChan, os.Interrupt)
+	publishCh, err := conn.Channel()
+	if err != nil {
+		log.Fatalf("could not create channel: %v", err)
+	}
 
-	// 5. Block the program here until a signal is received
-	fmt.Println("Server is running. Press Ctrl+C to shut down.")
-	<-signalChan
+	// 1. Declare the Dead Letter Queue (peril_dlq)
+	_, _, err = pubsub.DeclareAndBind(
+		conn,
+		"",           // Default exchange
+		"peril_dlq",  // Queue name
+		"peril_dlq",  // Routing key (matches queue name for default exchange)
+		pubsub.SimpleQueueDurable,
+	)
+	if err != nil {
+		log.Fatalf("could not declare dead letter queue: %v", err)
+	}
 
-	// 6. Final shutdown message
-	fmt.Println("Shutting down gracefully...")
+	// 2. Declare the Game Logs queue
+	_, _, err = pubsub.DeclareAndBind(
+		conn,
+		routing.ExchangePerilTopic,
+		routing.GameLogSlug,
+		"game_logs.*",
+		pubsub.SimpleQueueDurable,
+	)
+	if err != nil {
+		log.Fatalf("could not declare game logs queue: %v", err)
+	}
+
+	gamelogic.PrintServerHelp()
+
+	for {
+		words := gamelogic.GetInput()
+		if len(words) == 0 {
+			continue
+		}
+
+		switch words[0] {
+		case "pause":
+			pubsub.PublishJSON(publishCh, routing.ExchangePerilDirect, routing.PauseKey, routing.PlayingState{IsPaused: true})
+		case "resume":
+			pubsub.PublishJSON(publishCh, routing.ExchangePerilDirect, routing.PauseKey, routing.PlayingState{IsPaused: false})
+		case "quit":
+			return
+		}
+	}
 }
