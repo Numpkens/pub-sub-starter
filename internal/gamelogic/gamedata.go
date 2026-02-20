@@ -8,9 +8,9 @@ type Player struct {
 type UnitRank string
 
 const (
-	RankInfantry  = "infantry"
-	RankCavalry   = "cavalry"
-	RankArtillery = "artillery"
+	RankInfantry  UnitRank = "infantry"
+	RankCavalry   UnitRank = "cavalry"
+	RankArtillery UnitRank = "artillery"
 )
 
 type Unit struct {
